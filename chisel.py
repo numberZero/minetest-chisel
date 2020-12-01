@@ -26,6 +26,7 @@ import OpenGL
 from OpenGL.GL import *
 from OpenGL.GL import shaders # не импортируется звёздочкой, т. к. это подмодуль
 from math import *
+from functools import partial
 import numpy as np
 import random
 
@@ -34,17 +35,19 @@ def rand():
 		yield random.randrange(2)
 
 class Part:
-	indices = np.indices((16, 16, 16), dtype='int32').transpose().reshape((-1, 3))
+	indices = np.indices((16, 16, 16), dtype='int32').transpose().reshape((-1, 3)) # TODO произвольный размер
 
-	def __init__(self):
-		self.data = np.full((16, 16, 16), 1, 'int32')
-		#self.data = np.fromiter(rand(), 'int32', 16*16*16).reshape(16, 16, 16)
+	def __init__(self, fill = 1):
+		size = 16
+		self.size = size
+		self.data = np.full((size, size, size), fill, 'int32')
+		#self._init_indices(size)
 
 class GLPart(Part):
 	index_buf = 0
 
-	def __init__(self):
-		super(GLPart, self).__init__()
+	def __init__(self, *args, **kwargs):
+		super(GLPart, self).__init__(*args, **kwargs)
 		self.tex = 0
 
 	@classmethod
@@ -66,9 +69,6 @@ class GLPart(Part):
 	def updateGL(self):
 		glTextureSubImage3D(self.tex, 0, 0, 0, 0, 16, 16, 16, GL_RED_INTEGER, GL_INT, self.data)
 		glTextureParameteriv(self.tex, GL_TEXTURE_BORDER_COLOR, (1, 2, 3, 4))
-
-part = GLPart()
-sel = None
 
 class Face:
 	def __init__(self, u, v, w, name):
@@ -95,24 +95,15 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 		self.setMouseTracking(True)
 
 	def updateMouse(self):
-		global sel
 		if not self.mouse:
 			return
 		try:
-			x, y, z, p = self.img[self.img.shape[0] - self.mouse[1] - 1, self.mouse[0]]
+			h, w, _ = self.map.shape
+			x, y = self.mouse
+			key = tuple(self.map[h - y - 1, x])
 		except IndexError:
-			p = 255
-		if p == 255:
-			sel = None
-			mainWindow.hover.setText('none')
-			return
-		p, f = p & 0x1F, p >> 5
-		nsel = (p, x, y, z, f)
-		if nsel != sel:
-			sel = nsel
-			facename = faces[f].name
-			mainWindow.hover.setText(f'{p}: ({x}, {y}, {z}) {facename}')
-			updateViews()
+			key = None
+		mainWindow.hover(key)
 
 	def updateFramebuffer(self):
 		w = int(self.pw * self.scale)
@@ -143,16 +134,10 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 		self.updateMouse()
 
 	def mousePressEvent(self, event):
-		global sel, part
 		if event.button() != QtCore.Qt.LeftButton:
 			return super(ChiselView, self).mousePressEvent(event)
-		if not sel:
-			return
+		mainWindow.dig()
 		self.mouse = None
-		p, x, y, z, f = sel
-		part.data[z, y, x] = 0
-		part.updateGL()
-		updateViews()
 
 	def mouseReleaseEvent(self, event):
 		global sel
@@ -164,9 +149,10 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 	def leaveEvent(self, event):
 		super(ChiselView, self).leaveEvent(event)
 		self.mouse = None
-		mainWindow.hover.setText('none')
+		mainWindow.hover()
 
 	def initializeGL(self):
+		mainWindow.initGL()
 		with open('part.vert.glsl', 'rb') as text:
 			vs = shaders.compileShader(text, GL_VERTEX_SHADER)
 		with open('part.geom.glsl', 'rb') as text:
@@ -176,7 +162,6 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 		self.shader = shaders.compileProgram(vs, gs, fs)
 		self.fbt = []
 		self.fb = glGenFramebuffers(1)
-		part.initGL()
 
 	def resizeGL(self, w, h):
 		self.pw = w
@@ -228,25 +213,27 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 			glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, self.fbt[2], 0)
 			#glDrawBuffers(2, [GL_NONE, GL_COLOR_ATTACHMENT1])
 			glDrawBuffers(2, [GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1])
-			glClearBufferiv(GL_COLOR, 1, (255, 255, 255, 255))
+			glClearBufferiv(GL_COLOR, 1, mainWindow.dummy_key)
 
 			glUseProgram(self.shader)
-			glBindTextureUnit(0, part.tex)
 
 			glEnableVertexAttribArray(0)
 			glUniformMatrix4fv(0, 1, True, p * v * m)
 			glUniform1i(1, 0)
 			glUniform4f(2, 0, 1, 0, 1)
 			glVertexAttribIPointer(0, 3, GL_INT, 0, Part.indices)
-			glDrawArrays(GL_POINTS, 0, 16*16*16)
-			glDisableVertexAttribArray(0)
+			for part in mainWindow.parts:
+				glBindTextureUnit(0, part.tex)
+				glDrawArrays(GL_POINTS, 0, 16*16*16)
 
 			glDrawBuffer(GL_COLOR_ATTACHMENT0)
-			if sel:
+			if mainWindow.hovered:
 				glDepthFunc(GL_LEQUAL)
 				glUniform4f(2, 1, 0, 0, 0.5)
-				glVertexAttribI3i(0, *sel[1:4])
-				glDrawArrays(GL_POINTS, 0, 1)
+				glBindTextureUnit(0, mainWindow.selection.tex)
+				glDrawArrays(GL_POINTS, 0, 16*16*16)
+
+			glDisableVertexAttribArray(0)
 			glUseProgram(0)
 
 			glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fb)
@@ -255,7 +242,7 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 
 			img = np.ndarray((h, w, 4), 'uint8')
 			glGetTextureImage(self.fbt[2], 0, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, img.size, img)
-			self.img = img # FIXME scale
+			self.map = img # FIXME scale
 			glInvalidateFramebuffer(GL_READ_FRAMEBUFFER, 2, [GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1])
 			self.updateMouse()
 
@@ -274,11 +261,112 @@ class WindowLoader(QtUiTools.QUiLoader):
 		return super(WindowLoader, self).createWidget(className, parent, name)
 
 class ChiselWindow(QtWidgets.QMainWindow):
+	view_names = ['Front', 'Top', 'Right', 'User']
+	tool_names = ['1', 'U', 'V', 'W', 'X', 'Y', 'Z', 'UV', 'UW', 'VW', 'XY', 'XZ', 'YZ']
+	dummy_key = (255, 255, 255, 255)
+
 	def __init__(self):
 		super(ChiselWindow, self).__init__()
 		loader = WindowLoader(self)
 		loader.registerCustomWidget(ChiselView)
 		loader.load('mainwindow.ui')
+		self.initialized = False
+		self.parts = [GLPart(fill=1)]
+		self.selection = GLPart(fill=0)
+		self.hovered = None
+		self.views = [getattr(self, f'view{name}') for name in self.view_names]
+		self.tools = {}
+		for name in self.tool_names:
+			button = getattr(self, f'tool{name}')
+			button.clicked.connect(partial(self.selectTool, name))
+			self.tools[name] = button
+		self.tool_name = self.tool_names[0]
+		self.tools[self.tool_name].click()
+		self.viewTop.rotate = np.mat([[1,0,0,0], [0,0,1,0], [0,-1,0,0], [0,0,0,1]])
+		self.viewFront.rotate = np.mat([[1,0,0,0], [0,1,0,0], [0,0,1,0], [0,0,0,1]])
+		self.viewRight.rotate = np.mat([[0,0,-1,0], [0,1,0,0], [1,0,0,0], [0,0,0,1]])
+		self.viewUser.rotate = np.mat([[1,0,0,0], [0,0.866,0.500,0], [0,-0.500,0.866,0], [0,0,0,1]]) * np.mat([[0.707,0,-0.707,0], [0,1,0,0], [0.707,0,0.707,0], [0,0,0,1]])
+
+	def initGL(self):
+		if self.initialized:
+			return
+		self.selection.initGL()
+		for part in self.parts:
+			part.initGL()
+		self.initialized = True
+
+	def selectTool(self, tool_name: str):
+		self.tool_name = tool_name
+
+	def update(self):
+		super(ChiselWindow, self).update()
+		for view in self.views:
+			view.update()
+
+	def hover(self, key = None):
+		if key == self.dummy_key:
+			key = None
+		if key == self.hovered:
+			return
+		self.hovered = key
+		self.selection.data.fill(0)
+		if key is None:
+			self.Hover.setText('none')
+		else:
+			x, y, z, p = key
+			p, f = p & 0x1F, p >> 5
+			face = faces[f]
+			self.Hover.setText(f'{p}: ({x}, {y}, {z}) {face.name}')
+			tool = self.tool_name
+			if 'X' in tool:
+				x = slice(None)
+			if 'Y' in tool:
+				y = slice(None)
+			if 'Z' in tool:
+				z = slice(None)
+			if 'U' in tool:
+				if face.u == (1, 0, 0):
+					x = slice(None)
+				elif face.u == (0, 1, 0):
+					y = slice(None)
+				else:
+					z = slice(None)
+			if 'V' in tool:
+				if face.v == (1, 0, 0):
+					x = slice(None)
+				elif face.v == (0, 1, 0):
+					y = slice(None)
+				else:
+					z = slice(None)
+			if 'W' in tool:
+				if face.w == (-1, 0, 0):
+					x = slice(x, None)
+				elif face.w == (0, -1, 0):
+					y = slice(y, None)
+				elif face.w == (0, 0, -1):
+					z = slice(z, None)
+				elif face.w == (1, 0, 0):
+					x = slice(None, x + 1)
+				elif face.w == (0, 1, 0):
+					y = slice(None, y + 1)
+				else:
+					z = slice(None, z + 1)
+			self.selection.data[z, y, x] = 1
+		self.selection.updateGL()
+		self.update()
+
+	def dig(self):
+		if not self.hovered:
+			return
+		x, y, z, p = self.hovered
+		p, f = p & 0x1F, p >> 5
+		part = self.parts[p]
+		part.data *= 1 - self.selection.data
+		part.updateGL()
+		self.update()
+
+	def place(self):
+		pass
 
 f = QtGui.QSurfaceFormat()
 f.setRenderableType(f.OpenGL)
@@ -294,26 +382,15 @@ app = QtWidgets.QApplication(sys.argv)
 
 mainWindow = ChiselWindow()
 
-def updateViews():
-	mainWindow.viewTop.update()
-	mainWindow.viewRight.update()
-	mainWindow.viewFront.update()
-	mainWindow.viewUser.update()
-
-mainWindow.viewTop.rotate = np.mat([[1,0,0,0], [0,0,1,0], [0,-1,0,0], [0,0,0,1]])
-mainWindow.viewFront.rotate = np.mat([[1,0,0,0], [0,1,0,0], [0,0,1,0], [0,0,0,1]])
-mainWindow.viewRight.rotate = np.mat([[0,0,-1,0], [0,1,0,0], [1,0,0,0], [0,0,0,1]])
-mainWindow.viewUser.rotate = np.mat([[1,0,0,0], [0,0.866,0.500,0], [0,-0.500,0.866,0], [0,0,0,1]]) * np.mat([[0.707,0,-0.707,0], [0,1,0,0], [0.707,0,0.707,0], [0,0,0,1]])
-
-angle = 45.0
-start_time = time.time()
-def rotateIt(self: ChiselView):
-	global angle
-	t = time.time() - start_time
-	#angle = 45.0 + 60.0 * t
-	c = cos(angle * pi / 180.0)
-	s = sin(angle * pi / 180.0)
-	self.rotate = np.mat([[1,0,0,0], [0,0.866,0.500,0], [0,-0.500,0.866,0], [0,0,0,1]]) * np.mat([[c,0,-s,0], [0,1,0,0], [s,0,c,0], [0,0,0,1]])
+#angle = 45.0
+#start_time = time.time()
+#def rotateIt(self: ChiselView):
+	#global angle
+	#t = time.time() - start_time
+	##angle = 45.0 + 60.0 * t
+	#c = cos(angle * pi / 180.0)
+	#s = sin(angle * pi / 180.0)
+	#self.rotate = np.mat([[1,0,0,0], [0,0.866,0.500,0], [0,-0.500,0.866,0], [0,0,0,1]]) * np.mat([[c,0,-s,0], [0,1,0,0], [s,0,c,0], [0,0,0,1]])
 
 #mainWindow.viewUser.beforePaint = types.MethodType(rotateIt, mainWindow.viewUser)
 
