@@ -86,10 +86,29 @@ faces = [
 	Face((0, 0, 1), (0, 1, 0), (-1, 0, 0), "left"),
 ];
 
+class Rotation:
+	def __init__(self, yaw = 0.0, pitch = 0.0, roll = 0.0):
+		self.yaw = yaw
+		self.pitch = pitch
+		self.roll = roll
+
+	@property
+	def matrix(self):
+		yaw = self.yaw * (pi / 180.0)
+		pitch = self.pitch * (pi / 180.0)
+		roll = self.roll * (pi / 180.0)
+		yc, ys = cos(yaw), sin(yaw)
+		pc, ps = cos(pitch), sin(pitch)
+		rc, rs = cos(roll), sin(roll)
+		return \
+			np.mat([[rc,-rs,0,0], [rs,rc,0,0], [0,0,1,0], [0,0,0,1]]) * \
+			np.mat([[1,0,0,0], [0,pc,ps,0], [0,-ps,pc,0], [0,0,0,1]]) * \
+			np.mat([[yc,0,-ys,0], [0,1,0,0], [ys,0,yc,0], [0,0,0,1]])
+
 class ChiselView(QtWidgets.QOpenGLWidget):
 	def __init__(self, *args, **kwargs):
 		super(ChiselView, self).__init__(*args, **kwargs)
-		self.rotate = np.identity(4)
+		self.rotate = Rotation()
 		self.mouse = None
 		self.scale = 1
 		self.setMouseTracking(True)
@@ -180,7 +199,7 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 			h = int(self.ph * self.scale)
 			scale = 1.0
 			m = np.diag([-1, 1, 1, 1])
-			v = self.rotate
+			v = self.rotate.matrix
 			p = np.diag((scale / self.sw, scale / self.sh, scale, 1.0))
 
 			fb = glGetInteger(GL_DRAW_FRAMEBUFFER_BINDING)
@@ -282,10 +301,10 @@ class ChiselWindow(QtWidgets.QMainWindow):
 			self.tools[name] = button
 		self.tool_name = self.tool_names[0]
 		self.tools[self.tool_name].click()
-		self.viewTop.rotate = np.mat([[1,0,0,0], [0,0,1,0], [0,-1,0,0], [0,0,0,1]])
-		self.viewFront.rotate = np.mat([[1,0,0,0], [0,1,0,0], [0,0,1,0], [0,0,0,1]])
-		self.viewRight.rotate = np.mat([[0,0,-1,0], [0,1,0,0], [1,0,0,0], [0,0,0,1]])
-		self.viewUser.rotate = np.mat([[1,0,0,0], [0,0.866,0.500,0], [0,-0.500,0.866,0], [0,0,0,1]]) * np.mat([[0.707,0,-0.707,0], [0,1,0,0], [0.707,0,0.707,0], [0,0,0,1]])
+		self.viewTop.rotate = Rotation(0.0, 90.0)
+		self.viewFront.rotate = Rotation()
+		self.viewRight.rotate = Rotation(90.0, 0.0)
+		self.viewUser.rotate = Rotation(45.0, 30.0)
 
 	def initGL(self):
 		if self.initialized:
