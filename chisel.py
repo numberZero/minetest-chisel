@@ -27,6 +27,7 @@ from OpenGL.GL import *
 from OpenGL.GL import shaders # не импортируется звёздочкой, т. к. это подмодуль
 from math import *
 from functools import partial
+from copy import copy, deepcopy
 import numpy as np
 import random
 
@@ -111,9 +112,10 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 		self.rotate = Rotation()
 		self.mouse = None
 		self.scale = 1
+		self.rotation_speed = 0
 		self.setMouseTracking(True)
 
-	def updateMouse(self):
+	def updateMouse(self, mouse = None):
 		if not self.mouse:
 			return
 		try:
@@ -145,25 +147,50 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 		glDeleteTextures(self.fbt)
 		self.fbt = color, depth, id
 
-	def mouseMoveEvent(self, event):
-		super(ChiselView, self).mouseMoveEvent(event)
-		if event.buttons():
-			return
-		self.mouse = event.pos().x(), event.pos().y()
-		self.updateMouse()
+	def startRotate(self, mouse_pos):
+		self.mouse = None # это было для выделения
+		self.user_rotation_start_pos = mouse_pos
+		self.user_rotation_start_rotation = copy(self.rotate)
 
-	def mousePressEvent(self, event):
-		if event.button() != QtCore.Qt.LeftButton:
+	def doRotate(self, mouse_pos):
+		dx = mouse_pos.x() - self.user_rotation_start_pos.x()
+		dy = mouse_pos.y() - self.user_rotation_start_pos.y()
+		self.rotate.yaw = (self.user_rotation_start_rotation.yaw + self.rotation_speed * dx) % 360.0
+		self.rotate.pitch = min(max(self.user_rotation_start_rotation.pitch + self.rotation_speed * dy, -90.0), 90.0)
+		self.update()
+
+	def stopRotate(self, mouse_pos):
+		self.doRotate(mouse_pos)
+		del self.user_rotation_start_pos
+		del self.user_rotation_start_rotation
+
+	def mouseMoveEvent(self, event: QtGui.QMouseEvent):
+		if event.buttons() == 0:
+			self.mouse = event.pos().x(), event.pos().y()
+			self.updateMouse()
+		elif event.buttons() == QtCore.Qt.MiddleButton:
+			self.doRotate(event.pos())
+		else:
+			return super(ChiselView, self).mouseMoveEvent(event)
+
+	def mousePressEvent(self, event: QtGui.QMouseEvent):
+		if event.button() == QtCore.Qt.MiddleButton:
+			self.startRotate(event.pos())
+		elif event.button() == QtCore.Qt.LeftButton:
+			mainWindow.dig()
+			self.mouse = None
+		else:
+			self.mouse = None
+			mainWindow.hover()
 			return super(ChiselView, self).mousePressEvent(event)
-		mainWindow.dig()
-		self.mouse = None
 
-	def mouseReleaseEvent(self, event):
-		global sel
-		if event.button() != QtCore.Qt.LeftButton:
-			return super(ChiselView, self).mouseReleaseEvent(event)
-		self.mouse = event.pos().x(), event.pos().y()
-		self.updateMouse()
+	def mouseReleaseEvent(self, event: QtGui.QMouseEvent):
+		if event.button() == QtCore.Qt.MiddleButton:
+			self.stopRotate(event.pos())
+		if event.buttons() == 0:
+			self.mouse = event.pos().x(), event.pos().y()
+			self.updateMouse()
+		return super(ChiselView, self).mouseReleaseEvent(event)
 
 	def leaveEvent(self, event):
 		super(ChiselView, self).leaveEvent(event)
@@ -305,6 +332,7 @@ class ChiselWindow(QtWidgets.QMainWindow):
 		self.viewFront.rotate = Rotation()
 		self.viewRight.rotate = Rotation(90.0, 0.0)
 		self.viewUser.rotate = Rotation(45.0, 30.0)
+		self.viewUser.rotation_speed = 0.6
 
 	def initGL(self):
 		if self.initialized:
