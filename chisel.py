@@ -22,6 +22,8 @@ if 'WAYLAND_DISPLAY' in os.environ:
 	os.environ['PYOPENGL_PLATFORM'] = 'egl' # PyOpenGL такого не умеет, WTF?
 
 from PySide2 import QtCore, QtWidgets, QtUiTools, QtGui
+from PySide2.QtCore import *
+from PySide2.QtGui import *
 import OpenGL
 from OpenGL.GL import *
 from OpenGL.GL import shaders # не импортируется звёздочкой, т. к. это подмодуль
@@ -82,9 +84,9 @@ class Face:
 
 faces = [
 	Face((1, 0, 0), (0, 1, 0), (0, 0, 1), "back"),
-	Face((0, 0, 1), (1, 0, 0), (0, 1, 0), "top"),
-	Face((0, 1, 0), (0, 0, 1), (1, 0, 0), "right"),
-	Face((0, 1, 0), (1, 0, 0), (0, 0, -1), "front"),
+	Face((1, 0, 0), (0, 0, 1), (0, 1, 0), "top"),
+	Face((0, 0, 1), (0, 1, 0), (1, 0, 0), "right"),
+	Face((1, 0, 0), (0, 1, 0), (0, 0, -1), "front"),
 	Face((1, 0, 0), (0, 0, 1), (0, -1, 0), "bottom"),
 	Face((0, 0, 1), (0, 1, 0), (-1, 0, 0), "left"),
 ];
@@ -105,8 +107,8 @@ class Rotation:
 		rc, rs = cos(roll), sin(roll)
 		return \
 			np.mat([[rc,-rs,0,0], [rs,rc,0,0], [0,0,1,0], [0,0,0,1]]) * \
-			np.mat([[1,0,0,0], [0,pc,ps,0], [0,-ps,pc,0], [0,0,0,1]]) * \
-			np.mat([[yc,0,-ys,0], [0,1,0,0], [ys,0,yc,0], [0,0,0,1]])
+			np.mat([[1,0,0,0], [0,pc,-ps,0], [0,ps,pc,0], [0,0,0,1]]) * \
+			np.mat([[-yc,0,ys,0], [0,1,0,0], [ys,0,yc,0], [0,0,0,1]])
 
 class ChiselView(QtWidgets.QOpenGLWidget):
 	def __init__(self, *args, **kwargs):
@@ -157,8 +159,8 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 	def doRotate(self, mouse_pos):
 		dx = mouse_pos.x() - self.user_rotation_start_pos.x()
 		dy = mouse_pos.y() - self.user_rotation_start_pos.y()
-		self.rotate.yaw = (self.user_rotation_start_rotation.yaw + self.rotation_speed * dx) % 360.0
-		self.rotate.pitch = min(max(self.user_rotation_start_rotation.pitch + self.rotation_speed * dy, -90.0), 90.0)
+		self.rotate.yaw = (self.user_rotation_start_rotation.yaw - self.rotation_speed * dx) % 360.0
+		self.rotate.pitch = min(max(self.user_rotation_start_rotation.pitch - self.rotation_speed * dy, -90.0), 90.0)
 		self.update()
 
 	def stopRotate(self, mouse_pos):
@@ -166,19 +168,19 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 		del self.user_rotation_start_pos
 		del self.user_rotation_start_rotation
 
-	def mouseMoveEvent(self, event: QtGui.QMouseEvent):
+	def mouseMoveEvent(self, event: QMouseEvent):
 		if event.buttons() == 0:
 			self.mouse = event.pos().x(), event.pos().y()
 			self.updateMouse()
-		elif event.buttons() == QtCore.Qt.MiddleButton:
+		elif event.buttons() == Qt.MiddleButton:
 			self.doRotate(event.pos())
 		else:
 			return super(ChiselView, self).mouseMoveEvent(event)
 
-	def mousePressEvent(self, event: QtGui.QMouseEvent):
-		if event.button() == QtCore.Qt.MiddleButton:
+	def mousePressEvent(self, event: QMouseEvent):
+		if event.button() == Qt.MiddleButton:
 			self.startRotate(event.pos())
-		elif event.button() == QtCore.Qt.LeftButton:
+		elif event.button() == Qt.LeftButton:
 			mainWindow.dig()
 			self.mouse = None
 		else:
@@ -186,8 +188,8 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 			mainWindow.hover()
 			return super(ChiselView, self).mousePressEvent(event)
 
-	def mouseReleaseEvent(self, event: QtGui.QMouseEvent):
-		if event.button() == QtCore.Qt.MiddleButton:
+	def mouseReleaseEvent(self, event: QMouseEvent):
+		if event.button() == Qt.MiddleButton:
 			self.stopRotate(event.pos())
 		if event.buttons() == 0:
 			self.mouse = event.pos().x(), event.pos().y()
@@ -199,15 +201,54 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 		self.mouse = None
 		mainWindow.hover()
 
-	def initializeGL(self):
-		mainWindow.initGL()
+	@classmethod
+	def _initializeShader(cls):
 		with open(os.path.join(app_dir, 'part.vert.glsl'), 'rb') as text:
 			vs = shaders.compileShader(text, GL_VERTEX_SHADER)
 		with open(os.path.join(app_dir, 'part.geom.glsl'), 'rb') as text:
 			gs = shaders.compileShader(text, GL_GEOMETRY_SHADER)
 		with open(os.path.join(app_dir, 'part.frag.glsl'), 'rb') as text:
 			fs = shaders.compileShader(text, GL_FRAGMENT_SHADER)
-		self.shader = shaders.compileProgram(vs, gs, fs)
+		cls.shader = shaders.compileProgram(vs, gs, fs)
+
+	@classmethod
+	def _initializeWhite(cls):
+		cls.white = glGenTextures(1)
+		glBindTexture(GL_TEXTURE_2D, cls.white)
+		glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 1, 1)
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, b'\xff\xff\xff\xff')
+
+	@classmethod
+	def _initializeTexture(cls):
+		filename = os.path.join(app_dir, 'marble.png')
+		img = QImage(filename)
+		if img.isNull():
+			print(f'Can’t load texture from {filename}')
+			cls.texture = cls.white
+			return
+		img.convertTo(QImage.Format_RGB32)
+		cls.texture = glGenTextures(1)
+		glBindTexture(GL_TEXTURE_2D, cls.texture)
+		glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, *img.size().toTuple())
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+		glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, *img.size().toTuple(), GL_BGRA, GL_UNSIGNED_BYTE, img.constBits())
+
+	_initializedGL = False
+	@classmethod
+	def _initializeSharedGL(cls):
+		if cls._initializedGL:
+			return
+		cls._initializeShader()
+		cls._initializeWhite()
+		cls._initializeTexture()
+		cls._initializedGL = True
+
+	def initializeGL(self):
+		mainWindow.initGL()
+		self._initializeSharedGL()
 		self.fbt = []
 		self.fb = glGenFramebuffers(1)
 
@@ -268,12 +309,14 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 			glEnableVertexAttribArray(0)
 			glUniformMatrix4fv(0, 1, True, p * v * m)
 			glUniform1i(1, 0)
-			glUniform4f(2, 0, 1, 0, 1)
+			glUniform4f(2, 1, 1, 1, 1)
+			glBindTextureUnit(1, self.texture)
 			glVertexAttribIPointer(0, 3, GL_INT, 0, Part.indices)
 			for part in mainWindow.parts:
 				glBindTextureUnit(0, part.tex)
 				glDrawArrays(GL_POINTS, 0, 16*16*16)
 
+			glBindTextureUnit(1, self.white)
 			glDrawBuffer(GL_COLOR_ATTACHMENT0)
 			if mainWindow.hovered:
 				glDepthFunc(GL_LEQUAL)
@@ -330,10 +373,10 @@ class ChiselWindow(QtWidgets.QMainWindow):
 			self.tools[name] = button
 		self.tool_name = self.tool_names[0]
 		self.tools[self.tool_name].click()
-		self.viewTop.rotate = Rotation(0.0, 90.0)
+		self.viewTop.rotate = Rotation(0.0, -90.0)
 		self.viewFront.rotate = Rotation()
 		self.viewRight.rotate = Rotation(90.0, 0.0)
-		self.viewUser.rotate = Rotation(45.0, 30.0)
+		self.viewUser.rotate = Rotation(45.0, -30.0)
 		self.viewUser.rotation_speed = 0.6
 
 	def initGL(self):
@@ -417,16 +460,16 @@ class ChiselWindow(QtWidgets.QMainWindow):
 	def place(self):
 		pass
 
-f = QtGui.QSurfaceFormat()
+f = QSurfaceFormat()
 f.setRenderableType(f.OpenGL)
 f.setVersion(4, 2)
 #f.setSamples(4)
 f.setOption(f.DeprecatedFunctions)
 f.setOption(f.DebugContext)
 f.setProfile(f.CompatibilityProfile)
-QtGui.QSurfaceFormat.setDefaultFormat(f)
+QSurfaceFormat.setDefaultFormat(f)
 
-QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_ShareOpenGLContexts)
+QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
 app = QtWidgets.QApplication(sys.argv)
 
 mainWindow = ChiselWindow()
@@ -443,7 +486,7 @@ mainWindow = ChiselWindow()
 
 #mainWindow.viewUser.beforePaint = types.MethodType(rotateIt, mainWindow.viewUser)
 
-#timer = QtCore.QTimer(app)
+#timer = QTimer(app)
 #timer.timeout.connect(mainWindow.viewUser.update)
 #timer.start()
 
