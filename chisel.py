@@ -31,6 +31,8 @@ from copy import copy, deepcopy
 import numpy as np
 import random
 
+app_dir = os.path.dirname(__file__)
+
 def rand():
 	while True:
 		yield random.randrange(2)
@@ -199,11 +201,11 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 
 	def initializeGL(self):
 		mainWindow.initGL()
-		with open('part.vert.glsl', 'rb') as text:
+		with open(os.path.join(app_dir, 'part.vert.glsl'), 'rb') as text:
 			vs = shaders.compileShader(text, GL_VERTEX_SHADER)
-		with open('part.geom.glsl', 'rb') as text:
+		with open(os.path.join(app_dir, 'part.geom.glsl'), 'rb') as text:
 			gs = shaders.compileShader(text, GL_GEOMETRY_SHADER)
-		with open('part.frag.glsl', 'rb') as text:
+		with open(os.path.join(app_dir, 'part.frag.glsl'), 'rb') as text:
 			fs = shaders.compileShader(text, GL_FRAGMENT_SHADER)
 		self.shader = shaders.compileProgram(vs, gs, fs)
 		self.fbt = []
@@ -315,7 +317,7 @@ class ChiselWindow(QtWidgets.QMainWindow):
 		super(ChiselWindow, self).__init__()
 		loader = WindowLoader(self)
 		loader.registerCustomWidget(ChiselView)
-		loader.load('mainwindow.ui')
+		loader.load(os.path.join(app_dir, 'mainwindow.ui'))
 		self.initialized = False
 		self.parts = [GLPart(fill=1)]
 		self.selection = GLPart(fill=0)
