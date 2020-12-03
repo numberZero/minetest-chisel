@@ -32,6 +32,7 @@ from functools import partial
 from copy import copy, deepcopy
 import numpy as np
 import random
+import sqlite3
 
 app_dir = os.path.dirname(__file__)
 
@@ -55,7 +56,7 @@ class Part:
 	def __init__(self, size = 8, fill = 1):
 		self._init_indices(size)
 		self.size = size
-		self.data = np.full((size, size, size), fill, 'int32')
+		self.data = np.full((size, size, size), fill, 'int8')
 
 class GLPart(Part):
 	index_buf = 0
@@ -93,7 +94,7 @@ class GLPart(Part):
 		self.updateGL()
 
 	def updateGL(self):
-		glTextureSubImage3D(self.tex, 0, 0, 0, 0, self.size, self.size, self.size, GL_RED_INTEGER, GL_INT, self.data)
+		glTextureSubImage3D(self.tex, 0, 0, 0, 0, self.size, self.size, self.size, GL_RED_INTEGER, GL_BYTE, self.data)
 		glTextureParameteriv(self.tex, GL_TEXTURE_BORDER_COLOR, (1, 2, 3, 4))
 
 class Face:
@@ -374,17 +375,102 @@ class WindowLoader(QtUiTools.QUiLoader):
 		return super(WindowLoader, self).createWidget(className, parent, name)
 
 class ChiselWindow(QtWidgets.QMainWindow):
+	_gl_initialized = False
 	view_names = ['Front', 'Top', 'Right', 'User']
 	tool_names = ['1', 'U', 'V', 'W', 'X', 'Y', 'Z', 'UV', 'UW', 'VW', 'XY', 'XZ', 'YZ']
 	dummy_key = (255, 255, 255, 255)
 
-	def __init__(self):
+	def _read_part(self, cursor: sqlite3.Cursor, version: int):
+		cursor.execute('select size, content from part_versions where version = ?', (version,))
+		size, content = cursor.fetchone()
+		data = np.array(np.frombuffer(content, dtype='int8').reshape((size, size, size)), dtype='int8')
+		return size, data
+
+	def _serialize_part(self, part: Part, comment: str, db: sqlite3.Connection = None):
+		db = db or self.db
+		with db:
+			c = db.cursor()
+			c.execute('insert into part_versions(previous, size, comment, content) values(?, ?, ?, ?)', (part.db_version, part.size, comment, part.data.tobytes()))
+			version = c.lastrowid
+			c.execute('update parts set version = ? where id = ?', (version, part.db_id))
+			db.commit()
+		part.db_version = version
+		self.redo_list = []
+
+	def _undo(self):
+		part = self.parts[0]
+		db = self.db
+		with db:
+			c = db.cursor()
+			c.execute('select previous from part_versions where version = ?', (part.db_version,))
+			version, = c.fetchone()
+			if not version:
+				return False
+			size, data = self._read_part(c, version)
+			c.execute('update parts set version = ? where id = ?', (version, part.db_id))
+			db.commit()
+		self.redo_list.append(part.db_version)
+		assert(size == part.size) # FIXME
+		part.db_version = version
+		part.data = data
+		part.updateGL()
+		self.update()
+
+	def _redo(self):
+		if not self.redo_list:
+			return
+		part = self.parts[0]
+		db = self.db
+		with db:
+			c = db.cursor()
+			version = self.redo_list[-1]
+			size, data = self._read_part(c, version)
+			c.execute('update parts set version = ? where id = ?', (version, part.db_id))
+			db.commit()
+		assert(size == part.size) # FIXME
+		part.db_version = version
+		part.data = data
+		self.redo_list.pop()
+		part.updateGL()
+		self.update()
+
+	def _new(self):
+		part = GLPart(fill=1)
+		db = sqlite3.connect(":memory:")
+		with db:
+			c = db.cursor()
+			c.execute('''create table parts (
+					id integer primary key,
+					version integer unique not null)''')
+			c.execute('''create table part_versions (
+					version integer primary key,
+					previous integer,
+					size integer not null,
+					comment text not null,
+					content blob not null)''')
+			c.execute('''create index part_versions_prev on part_versions(previous)''')
+			c.execute('''insert into parts(version) values(0)''')
+		part.db_id = c.lastrowid
+		part.db_version = None
+		self._serialize_part(part, "Initial", db)
+		self.db = db
+		self.parts = [part]
+
+	def _open(self, filename):
+		if not os.path.exists(filename):
+			raise os.FileNotFoundError(f'File "{filename}" not found')
+		db = sqlite3.connect(filename)
+
+	def __init__(self, filename = None):
 		super(ChiselWindow, self).__init__()
 		loader = WindowLoader(self)
 		loader.registerCustomWidget(ChiselView)
 		loader.load(os.path.join(app_dir, 'mainwindow.ui'))
-		self.initialized = False
-		self.parts = [GLPart(fill=1)]
+		if filename:
+			self._open(filename)
+		else:
+			self._new()
+		self.redo_list = []
 		self.selection = GLPart(fill=0)
 		self.hovered = None
 		self.views = [getattr(self, f'view{name}') for name in self.view_names]
@@ -400,14 +486,16 @@ class ChiselWindow(QtWidgets.QMainWindow):
 		self.viewRight.rotate = Rotation(90.0, 0.0)
 		self.viewUser.rotate = Rotation(45.0, -30.0)
 		self.viewUser.rotation_speed = 0.6
+		self.actionUndo.triggered.connect(self._undo)
+		self.actionRedo.triggered.connect(self._redo)
 
 	def initGL(self):
-		if self.initialized:
+		if self._gl_initialized:
 			return
 		self.selection.initGL()
 		for part in self.parts:
 			part.initGL()
-		self.initialized = True
+		self._gl_initialized = True
 
 	def selectTool(self, tool_name: str):
 		self.tool_name = tool_name
@@ -476,6 +564,7 @@ class ChiselWindow(QtWidgets.QMainWindow):
 		p, f = p & 0x1F, p >> 5
 		part = self.parts[p]
 		part.data *= 1 - self.selection.data
+		self._serialize_part(part, f'Dig {p}/{f}:{x},{y},{z} with {self.tool_name}')
 		part.updateGL()
 		self.update()
 
@@ -495,23 +584,5 @@ QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts)
 app = QtWidgets.QApplication(sys.argv)
 
 mainWindow = ChiselWindow()
-
-#angle = 45.0
-#start_time = time.time()
-#def rotateIt(self: ChiselView):
-	#global angle
-	#t = time.time() - start_time
-	##angle = 45.0 + 60.0 * t
-	#c = cos(angle * pi / 180.0)
-	#s = sin(angle * pi / 180.0)
-	#self.rotate = np.mat([[1,0,0,0], [0,0.866,0.500,0], [0,-0.500,0.866,0], [0,0,0,1]]) * np.mat([[c,0,-s,0], [0,1,0,0], [s,0,c,0], [0,0,0,1]])
-
-#mainWindow.viewUser.beforePaint = types.MethodType(rotateIt, mainWindow.viewUser)
-
-#timer = QTimer(app)
-#timer.timeout.connect(mainWindow.viewUser.update)
-#timer.start()
-
 mainWindow.show()
-
 sys.exit(app.exec_())
