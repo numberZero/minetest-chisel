@@ -40,13 +40,22 @@ def rand():
 		yield random.randrange(2)
 
 class Part:
-	indices = np.indices((16, 16, 16), dtype='int32').transpose().reshape((-1, 3)) # TODO произвольный размер
+	max_size = 1
+	indices = np.array([(0, 0, 0)], dtype='int32')
 
-	def __init__(self, fill = 1):
-		size = 16
+	@classmethod
+	def _init_indices(cls, size: int):
+		if size <= Part.max_size:
+			return False
+		i = np.indices((size, size, size), dtype='int32').transpose().reshape((-1, 3))
+		Part.indices = np.array(i[i.max(1).argsort()], dtype='int32')
+		Part.max_size = size
+		return True
+
+	def __init__(self, size = 8, fill = 1):
+		self._init_indices(size)
 		self.size = size
 		self.data = np.full((size, size, size), fill, 'int32')
-		#self._init_indices(size)
 
 class GLPart(Part):
 	index_buf = 0
@@ -59,6 +68,18 @@ class GLPart(Part):
 	def _initGL_shared(cls):
 		if cls.index_buf:
 			return
+		cls.index_buf = glGenBuffers(1)
+		glBindBuffer(GL_SHADER_STORAGE_BUFFER, cls.index_buf)
+
+	@classmethod
+	def _init_indices(cls, size: int):
+		if not super(GLPart, cls)._init_indices(size):
+			return
+		if not cls.index_buf:
+			return
+		glDeleteBuffers(1, [cls.index_buf])
+		cls.index_buf = 0
+		cls._initGL_shared()
 
 	def initGL(self):
 		self._initGL_shared()
@@ -68,11 +89,11 @@ class GLPart(Part):
 		glBindTexture(GL_TEXTURE_3D, self.tex) # создание 3D-текстуры
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
 		glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
-		glTexStorage3D(GL_TEXTURE_3D, 1, GL_R8I, 16, 16, 16)
+		glTexStorage3D(GL_TEXTURE_3D, 1, GL_R8I, self.size, self.size, self.size)
 		self.updateGL()
 
 	def updateGL(self):
-		glTextureSubImage3D(self.tex, 0, 0, 0, 0, 16, 16, 16, GL_RED_INTEGER, GL_INT, self.data)
+		glTextureSubImage3D(self.tex, 0, 0, 0, 0, self.size, self.size, self.size, GL_RED_INTEGER, GL_INT, self.data)
 		glTextureParameteriv(self.tex, GL_TEXTURE_BORDER_COLOR, (1, 2, 3, 4))
 
 class Face:
@@ -313,8 +334,9 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 			glBindTextureUnit(1, self.texture)
 			glVertexAttribIPointer(0, 3, GL_INT, 0, Part.indices)
 			for part in mainWindow.parts:
+				glUniform1i(3, part.size)
 				glBindTextureUnit(0, part.tex)
-				glDrawArrays(GL_POINTS, 0, 16*16*16)
+				glDrawArrays(GL_POINTS, 0, part.size**3)
 
 			glBindTextureUnit(1, self.white)
 			glDrawBuffer(GL_COLOR_ATTACHMENT0)
@@ -322,7 +344,7 @@ class ChiselView(QtWidgets.QOpenGLWidget):
 				glDepthFunc(GL_LEQUAL)
 				glUniform4f(2, 1, 0, 0, 0.5)
 				glBindTextureUnit(0, mainWindow.selection.tex)
-				glDrawArrays(GL_POINTS, 0, 16*16*16)
+				glDrawArrays(GL_POINTS, 0, mainWindow.selection.size**3)
 
 			glDisableVertexAttribArray(0)
 			glUseProgram(0)

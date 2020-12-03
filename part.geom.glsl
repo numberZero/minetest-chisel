@@ -5,6 +5,7 @@ layout(triangle_strip, max_vertices = 24) out;
 
 layout(location = 0) uniform mat4 mvp;
 layout(location = 1) uniform int part_id = 0;
+layout(location = 3) uniform int part_size = 16;
 layout(binding = 0) uniform usampler3D part_shape;
 
 in PerVertex
@@ -32,6 +33,7 @@ const Face faces[6] = {
 const ivec2 offs[4] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
 
 ivec3 pos;
+float scale;
 
 void MakeFace(int face_id) {
 	Face face = faces[face_id];
@@ -46,7 +48,7 @@ void MakeFace(int face_id) {
 	for (int vid = 0; vid < 4; vid++) {
 		ivec2 vertex_offset = offs[vid];
 		ivec3 off = face_offset + face.u * vertex_offset.x + face.v * vertex_offset.y;
-		vec3 vp = vec3(pos + off - 8) * (1.0 / 16.0);
+		vec3 vp = scale * vec3(pos + off - part_size / 2);
 		gl_Position = mvp * vec4(vp, 1.0);
 		color = vec4(face.shade.xxx, 1.0);
 		uv = face.tmat * vec4(vp, 1.0);
@@ -61,6 +63,7 @@ void main() {
 	uint type = texelFetch(part_shape, pos, 0).x;
 	if (type == 0)
 		return;
+	scale = 1.0 / part_size;
 	for (int k = 0; k < 6; k++)
 		MakeFace(k);
 }
